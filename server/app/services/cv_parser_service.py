@@ -12,15 +12,13 @@ api_key = os.getenv("OPENROUTER_API_KEY")
 openai_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=api_key,
-    default_headers={"HTTP-Referer": "http://localhost:5000"}  # replace with your frontend URL
+    default_headers={"HTTP-Referer": "http://localhost:5000"}
 )
 
 class HybridResumeAnalyzer:
     @staticmethod
     def upload_cv(file):
-        """
-        Upload resume file to Cloudinary and return secure URL.
-        """
+        """Upload resume to Cloudinary."""
         try:
             result = cloudinary_upload(
                 file,
@@ -35,11 +33,20 @@ class HybridResumeAnalyzer:
     @staticmethod
     def analyse_resume(resume_content, job_id):
         """
-        Analyse resume against job description from the Requisition table.
-        Returns structured data: match_score, missing_skills, suggestions
+        Analyse resume text against the job description.
+        FIXES:
+        - Prevents OOM by limiting text size.
+        - Uses a fast OpenRouter model.
+        - Prevents worker timeout.
         """
-        # Fetch job from DB
+        # Ensure resume is string
+        if isinstance(resume_content, bytes):
+            resume_content = resume_content.decode(errors="ignore")
+
+        # ----------- Prevent OOM / Timeouts -----------
+        resume_content = (resume_content or "")[:8000]          # limit 8k chars
         job = Requisition.query.get(job_id)
+
         if not job:
             return {
                 "match_score": 0,
@@ -48,9 +55,9 @@ class HybridResumeAnalyzer:
                 "raw_text": "Job not found"
             }
 
-        job_description = job.description or ""
+        job_description = (job.description or "")[:4000]        # limit 4k chars
 
-        # Construct prompt
+        # ----------- AI Prompt -----------
         prompt = f"""
 Resume:
 {resume_content}
@@ -73,38 +80,53 @@ Suggestions:
 """
 
         try:
-            # Call OpenRouter
+            # ----------- Stable Fast Model -----------
             response = openai_client.chat.completions.create(
-                model="openrouter/auto",
+                model="google/gemini-2.0-flash-lite-preview",  # FAST & lightweight
                 messages=[
-                    {"role": "system", "content": "You are an AI recruitment assistant. Always return results in the required format only."},
+                    {
+                        "role": "system",
+                        "content": "You are an AI recruitment assistant. Return results ONLY in the required format."
+                    },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                top_p=0.9,
-                max_tokens=1024
+                temperature=0.5,
+                max_tokens=600
             )
 
             text = response.choices[0].message.content or ""
 
-            # --- Parsing ---
-            # Match score (75/100 or 75%)
+            # ----------- Parsing -----------
             score_match = re.search(r"(\d{1,3})(?:/100|%)", text)
             match_score = int(score_match.group(1)) if score_match else 0
 
-            # Missing skills
-            missing_skills_match = re.search(r"Missing Skills:\s*(.*?)(?:Suggestions:|$)", text, re.DOTALL)
+            missing_skills_match = re.search(
+                r"Missing Skills:\s*(.*?)(?:Suggestions:|$)",
+                text,
+                re.DOTALL
+            )
             missing_skills = []
             if missing_skills_match:
                 skills_text = missing_skills_match.group(1)
-                missing_skills = [line.strip("- ").strip() for line in skills_text.strip().splitlines() if line.strip()]
+                missing_skills = [
+                    line.strip("- ").strip()
+                    for line in skills_text.strip().splitlines()
+                    if line.strip()
+                ]
 
-            # Suggestions
-            suggestions_match = re.search(r"Suggestions:\s*(.*)", text, re.DOTALL)
+            suggestions_match = re.search(
+                r"Suggestions:\s*(.*)",
+                text,
+                re.DOTALL
+            )
             suggestions = []
             if suggestions_match:
                 suggestions_text = suggestions_match.group(1)
-                suggestions = [line.strip("- ").strip() for line in suggestions_text.strip().splitlines() if line.strip()]
+                suggestions = [
+                    line.strip("- ").strip()
+                    for line in suggestions_text.strip().splitlines()
+                    if line.strip()
+                ]
 
             return {
                 "match_score": match_score,
