@@ -15,6 +15,7 @@ from app.utils.decorators import role_required
 from app.utils.helper import get_current_candidate
 from app.services.audit2 import AuditService
 import fitz
+import traceback
 
 
 
@@ -147,30 +148,52 @@ def upload_resume(application_id):
             return jsonify({"error": "No resume uploaded"}), 400
 
         file = request.files["resume"]
+        current_app.logger.info(f"Processing uploaded file: {file.filename}")
 
         # --- Full end-to-end processing ---
-        analyzer = HybridResumeAnalyzer()
-        result = analyzer.upload_and_analyse(file, job.id)
+        try:
+            result = HybridResumeAnalyzer.upload_and_analyse(file, job.id)
+            current_app.logger.info(f"Hybrid analysis result: {result}")
+        except Exception as e:
+            current_app.logger.error(
+                f"HybridResumeAnalyzer failed: {e}\n{traceback.format_exc()}"
+            )
+            return jsonify({"error": "Resume analysis failed"}), 500
 
         if result.get("cv_url") is None:
+            current_app.logger.error("Cloudinary upload returned None")
             return jsonify({"error": "Failed to upload resume"}), 500
 
         # --- Save results to DB ---
-        application.resume_url = result["cv_url"]
-        application.cv_score = result.get("match_score", 0)
-        application.cv_parser_result = result
-        application.recommendation = result.get("recommendation", "")
-        db.session.commit()
+        try:
+            application.resume_url = result["cv_url"]
+            application.cv_score = result.get("match_score", 0)
+            application.cv_parser_result = result
+            application.recommendation = result.get("recommendation", "")
+            db.session.commit()
+        except Exception as e:
+            current_app.logger.error(
+                f"Database commit failed: {e}\n{traceback.format_exc()}"
+            )
+            db.session.rollback()
+            return jsonify({"error": "Failed to save resume data"}), 500
 
         # --- Notify admins ---
-        admins = User.query.filter_by(role="admin").all()
-        for admin in admins:
-            notif = Notification(
-                user_id=admin.id,
-                message=f"{candidate.full_name} submitted resume for {job.title}."
+        try:
+            admins = User.query.filter_by(role="admin").all()
+            for admin in admins:
+                notif = Notification(
+                    user_id=admin.id,
+                    message=f"{candidate.full_name} submitted resume for {job.title}."
+                )
+                db.session.add(notif)
+            db.session.commit()
+        except Exception as e:
+            current_app.logger.error(
+                f"Admin notification failed: {e}\n{traceback.format_exc()}"
             )
-            db.session.add(notif)
-        db.session.commit()
+            db.session.rollback()
+            # Do not fail the request if notifications fail
 
         # --- Return JSON response ---
         return jsonify({
@@ -184,7 +207,9 @@ def upload_resume(application_id):
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Upload resume error: {e}", exc_info=True)
+        current_app.logger.error(
+            f"Upload resume unexpected error: {e}\n{traceback.format_exc()}"
+        )
         return jsonify({"error": "Internal server error"}), 500
 
 
