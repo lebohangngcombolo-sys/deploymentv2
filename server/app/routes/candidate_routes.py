@@ -159,7 +159,8 @@ def upload_resume(application_id):
 
         # --- Hybrid Resume Analysis ---
         analyzer = HybridResumeAnalyzer()
-        parser_result = analyzer.analyse(resume_text, job.id)
+        parser_result = analyzer.analyse_resume(resume_text, job.id)
+
 
         # --- Save results ---
         application.resume_url = resume_url

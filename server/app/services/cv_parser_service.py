@@ -67,44 +67,49 @@ Task:
 Return in format:
 Match Score: XX/100
 Missing Skills:
-- ...
+- skill 1
+- skill 2
 Suggestions:
-- ...
+- suggestion 1
+- suggestion 2
 """
 
         try:
-            # Call OpenRouter
+            # Call OpenRouter AI
             response = openai_client.chat.completions.create(
                 model="openrouter/auto",
                 messages=[
-                    {"role": "system", "content": "You are an AI recruitment assistant. Always return results in the required format only."},
+                    {"role": "system", "content": "You are an AI recruitment assistant. Always return results in the requested format."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
+                temperature=0,  # deterministic output
                 top_p=0.9,
                 max_tokens=1024
             )
 
             text = response.choices[0].message.content or ""
+            
+            # --- DEBUG ---
+            print("AI Output:\n", text)
 
             # --- Parsing ---
-            # Match score (75/100 or 75%)
-            score_match = re.search(r"(\d{1,3})(?:/100|%)", text)
+            # Match score (flexible)
+            score_match = re.search(r"(\d{1,3})\s*(?:/100|%|out of 100)?", text)
             match_score = int(score_match.group(1)) if score_match else 0
 
-            # Missing skills
-            missing_skills_match = re.search(r"Missing Skills:\s*(.*?)(?:Suggestions:|$)", text, re.DOTALL)
+            # Missing skills (handle bullets or plain lines)
+            missing_skills_match = re.search(r"Missing Skills:\s*(.*?)(?:Suggestions:|$)", text, re.DOTALL | re.IGNORECASE)
             missing_skills = []
             if missing_skills_match:
                 skills_text = missing_skills_match.group(1)
-                missing_skills = [line.strip("- ").strip() for line in skills_text.strip().splitlines() if line.strip()]
+                missing_skills = [line.strip("•*- ").strip() for line in skills_text.strip().splitlines() if line.strip()]
 
             # Suggestions
-            suggestions_match = re.search(r"Suggestions:\s*(.*)", text, re.DOTALL)
+            suggestions_match = re.search(r"Suggestions:\s*(.*)", text, re.DOTALL | re.IGNORECASE)
             suggestions = []
             if suggestions_match:
                 suggestions_text = suggestions_match.group(1)
-                suggestions = [line.strip("- ").strip() for line in suggestions_text.strip().splitlines() if line.strip()]
+                suggestions = [line.strip("•*- ").strip() for line in suggestions_text.strip().splitlines() if line.strip()]
 
             return {
                 "match_score": match_score,
@@ -120,3 +125,4 @@ Suggestions:
                 "suggestions": [],
                 "raw_text": f"Error during analysis: {str(e)}"
             }
+
