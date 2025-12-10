@@ -12,7 +12,7 @@ api_key = os.getenv("OPENROUTER_API_KEY")
 openai_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=api_key,
-    default_headers={"HTTP-Referer": "http://localhost:5000"}  # replace with your frontend URL
+    default_headers={"HTTP-Referer": "https://willowy-scone-c14f7c.netlify.app/"}  # replace with your frontend URL
 )
 
 class HybridResumeAnalyzer:
