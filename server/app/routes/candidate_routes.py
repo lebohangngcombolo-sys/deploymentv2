@@ -124,49 +124,47 @@ def get_available_jobs():
 
 # ----------------- UPLOAD RESUME -----------------
 # ----------------- UPLOAD RESUME -----------------
+from flask import request, jsonify, current_app
+from flask_jwt_extended import get_jwt_identity
+from app.models import Application, User, Notification, db
+from app.analyzer import HybridResumeAnalyzer  # make sure to import your updated analyzer
+from app.decorators import role_required
+
 @candidate_bp.route("/upload_resume/<int:application_id>", methods=["POST"])
 @role_required(["candidate"])
 def upload_resume(application_id):
     try:
+        # --- Fetch application ---
         application = Application.query.get_or_404(application_id)
         candidate = application.candidate
         job = application.requisition
 
+        # --- Authorization ---
         if application.candidate.user.id != int(get_jwt_identity()):
             return jsonify({"error": "Unauthorized"}), 403
 
+        # --- Prevent duplicate uploads ---
         if getattr(application, "resume_url", None):
             return jsonify({"error": "Resume already uploaded"}), 400
 
+        # --- Check file presence ---
         if "resume" not in request.files:
             return jsonify({"error": "No resume uploaded"}), 400
 
         file = request.files["resume"]
 
-        # --- Upload to Cloudinary ---
-        resume_url = HybridResumeAnalyzer.upload_cv(file)
-        if not resume_url:
+        # --- Full end-to-end processing ---
+        analyzer = HybridResumeAnalyzer()
+        result = analyzer.upload_and_analyse(file, job.id)
+
+        if result.get("cv_url") is None:
             return jsonify({"error": "Failed to upload resume"}), 500
 
-        # --- Extract PDF text if needed ---
-        resume_text = request.form.get("resume_text", "")
-        if not resume_text and file.filename.lower().endswith(".pdf"):
-            file.stream.seek(0)
-            pdf_doc = fitz.open(stream=file.stream.read(), filetype="pdf")
-            resume_text = ""
-            for page in pdf_doc:
-                resume_text += page.get_text()
-
-        # --- Hybrid Resume Analysis ---
-        analyzer = HybridResumeAnalyzer()
-        parser_result = analyzer.analyse_resume(resume_text, job.id)
-
-
-        # --- Save results ---
-        application.resume_url = resume_url
-        application.cv_score = parser_result.get("match_score", 0)
-        application.cv_parser_result = parser_result
-        application.recommendation = parser_result.get("recommendation", "")
+        # --- Save results to DB ---
+        application.resume_url = result["cv_url"]
+        application.cv_score = result.get("match_score", 0)
+        application.cv_parser_result = result
+        application.recommendation = result.get("recommendation", "")
         db.session.commit()
 
         # --- Notify admins ---
@@ -179,14 +177,15 @@ def upload_resume(application_id):
             db.session.add(notif)
         db.session.commit()
 
+        # --- Return JSON response ---
         return jsonify({
             "message": "Resume uploaded and analyzed",
             "cv_score": application.cv_score,
-            "missing_skills": parser_result.get("missing_skills", []),
-            "suggestions": parser_result.get("suggestions", []),
+            "missing_skills": result.get("missing_skills", []),
+            "suggestions": result.get("suggestions", []),
             "recommendation": application.recommendation,
-            "resume_url": resume_url,
-            "raw_parser_text": parser_result.get("raw_text", "")
+            "resume_url": result["cv_url"],
+            "raw_parser_text": result.get("raw_text", "")
         }), 200
 
     except Exception as e:

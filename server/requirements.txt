@@ -28,4 +28,6 @@ qrcode
 sendgrid
 bleach
 flask-limiter
+pdfplumber
+python-docx
 
