@@ -125,7 +125,6 @@ def get_available_jobs():
 
 # ----------------- UPLOAD RESUME -----------------
 # ----------------- UPLOAD RESUME -----------------
-
 @candidate_bp.route("/upload_resume/<int:application_id>", methods=["POST"])
 @role_required(["candidate"])
 def upload_resume(application_id):
@@ -135,50 +134,47 @@ def upload_resume(application_id):
         candidate = application.candidate
         job = application.requisition
 
-        # --- Authorization ---
+        # --- Authorization check ---
         if application.candidate.user.id != int(get_jwt_identity()):
             return jsonify({"error": "Unauthorized"}), 403
 
-        # --- Prevent duplicate uploads ---
+        # --- Prevent duplicate upload ---
         if getattr(application, "resume_url", None):
             return jsonify({"error": "Resume already uploaded"}), 400
 
-        # --- Check file presence ---
+        # --- Check uploaded file ---
         if "resume" not in request.files:
             return jsonify({"error": "No resume uploaded"}), 400
 
         file = request.files["resume"]
-        current_app.logger.info(f"Processing uploaded file: {file.filename}")
+        current_app.logger.info(f"Received file: {file.filename}, content_type={file.content_type}")
 
-        # --- Full end-to-end processing ---
+        # --- End-to-end upload & analyse ---
         try:
-            result = HybridResumeAnalyzer.upload_and_analyse(file, job.id)
-            current_app.logger.info(f"Hybrid analysis result: {result}")
+            parser_result = HybridResumeAnalyzer.upload_and_analyse(file, job.id)
+            current_app.logger.info(f"Hybrid analysis result: {parser_result}")
         except Exception as e:
-            current_app.logger.error(
-                f"HybridResumeAnalyzer failed: {e}\n{traceback.format_exc()}"
-            )
+            current_app.logger.error(f"Hybrid analysis failed: {e}\n{traceback.format_exc()}")
             return jsonify({"error": "Resume analysis failed"}), 500
 
-        if result.get("cv_url") is None:
+        cv_url = parser_result.get("cv_url")
+        if not cv_url:
             current_app.logger.error("Cloudinary upload returned None")
             return jsonify({"error": "Failed to upload resume"}), 500
 
         # --- Save results to DB ---
         try:
-            application.resume_url = result["cv_url"]
-            application.cv_score = result.get("match_score", 0)
-            application.cv_parser_result = result
-            application.recommendation = result.get("recommendation", "")
+            application.resume_url = cv_url
+            application.cv_score = parser_result.get("match_score", 0)
+            application.cv_parser_result = parser_result
+            application.recommendation = parser_result.get("recommendation", "")
             db.session.commit()
         except Exception as e:
-            current_app.logger.error(
-                f"Database commit failed: {e}\n{traceback.format_exc()}"
-            )
+            current_app.logger.error(f"Database commit failed: {e}\n{traceback.format_exc()}")
             db.session.rollback()
             return jsonify({"error": "Failed to save resume data"}), 500
 
-        # --- Notify admins ---
+        # --- Notify admins (non-blocking) ---
         try:
             admins = User.query.filter_by(role="admin").all()
             for admin in admins:
@@ -189,27 +185,23 @@ def upload_resume(application_id):
                 db.session.add(notif)
             db.session.commit()
         except Exception as e:
-            current_app.logger.error(
-                f"Admin notification failed: {e}\n{traceback.format_exc()}"
-            )
+            current_app.logger.error(f"Admin notification failed: {e}\n{traceback.format_exc()}")
             db.session.rollback()
-            # Do not fail the request if notifications fail
+            # Do not fail request if notification fails
 
         # --- Return JSON response ---
         return jsonify({
             "message": "Resume uploaded and analyzed",
             "cv_score": application.cv_score,
-            "missing_skills": result.get("missing_skills", []),
-            "suggestions": result.get("suggestions", []),
+            "missing_skills": parser_result.get("missing_skills", []),
+            "suggestions": parser_result.get("suggestions", []),
             "recommendation": application.recommendation,
-            "resume_url": result["cv_url"],
-            "raw_parser_text": result.get("raw_text", "")
+            "resume_url": cv_url,
+            "raw_parser_text": parser_result.get("raw_text", "")
         }), 200
 
     except Exception as e:
-        current_app.logger.error(
-            f"Upload resume unexpected error: {e}\n{traceback.format_exc()}"
-        )
+        current_app.logger.error(f"Upload resume unexpected error: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error"}), 500
 
 
