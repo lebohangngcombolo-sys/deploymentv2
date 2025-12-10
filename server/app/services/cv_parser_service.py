@@ -12,10 +12,12 @@ api_key = os.getenv("OPENROUTER_API_KEY")
 openai_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=api_key,
-    default_headers={"HTTP-Referer": "https://willowy-scone-c14f7c.netlify.app/"}  # replace with your frontend URL
+    default_headers={"HTTP-Referer": "https://willowy-scone-c14f7c.netlify.app/"}
 )
 
+
 class HybridResumeAnalyzer:
+
     @staticmethod
     def upload_cv(file):
         """
@@ -24,21 +26,22 @@ class HybridResumeAnalyzer:
         try:
             result = cloudinary_upload(
                 file,
-                resource_type="raw",
-                folder="candidate_cvs"
+                folder="candidate_cvs",
+                resource_type="raw"
             )
             return result.get("secure_url")
         except Exception as e:
-            print("Cloudinary Upload Error:", e)
+            print("Cloudinary Upload Error:", str(e))
             return None
 
     @staticmethod
     def analyse_resume(resume_content, job_id):
         """
-        Analyse resume against job description from the Requisition table.
-        Returns structured data: match_score, missing_skills, suggestions
+        Analyse resume against job description and return:
+        match_score, missing_skills, suggestions, raw_text
         """
-        # Fetch job from DB
+
+        # Fetch job
         job = Requisition.query.get(job_id)
         if not job:
             return {
@@ -50,61 +53,65 @@ class HybridResumeAnalyzer:
 
         job_description = job.description or ""
 
-        # Construct prompt
+        # -----------------------------
+        # Optimized Prompt
+        # -----------------------------
         prompt = f"""
+You are an AI recruitment assistant. Compare the resume to the job description.
+Return ONLY the following sections:
+
+Match Score: XX/100
+Missing Skills:
+- item
+Suggestions:
+- item
+
 Resume:
 {resume_content}
 
 Job Description:
 {job_description}
-
-Task:
-- Analyze the resume against the job description.
-- Give a match score out of 100.
-- Highlight missing skills or experiences.
-- Suggest improvements.
-
-Return in format:
-Match Score: XX/100
-Missing Skills:
-- ...
-Suggestions:
-- ...
 """
 
         try:
-            # Call OpenRouter
+            # -----------------------------
+            # Optimized API call
+            # -----------------------------
             response = openai_client.chat.completions.create(
                 model="openrouter/auto",
-                messages=[
-                    {"role": "system", "content": "You are an AI recruitment assistant. Always return results in the required format only."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                top_p=0.9,
-                max_tokens=1024
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500,
+                timeout=30  # HARD STOP (prevents Gunicorn killing worker)
             )
 
             text = response.choices[0].message.content or ""
 
-            # --- Parsing ---
-            # Match score (75/100 or 75%)
-            score_match = re.search(r"(\d{1,3})(?:/100|%)", text)
-            match_score = int(score_match.group(1)) if score_match else 0
+            # -----------------------------
+            # Parsing
+            # -----------------------------
 
-            # Missing skills
-            missing_skills_match = re.search(r"Missing Skills:\s*(.*?)(?:Suggestions:|$)", text, re.DOTALL)
+            # Score (e.g., 75/100 or 75%)
+            score_match = re.search(r"(\d{1,3})(?:/100|%)", text)
+            match_score = min(int(score_match.group(1)), 100) if score_match else 0
+
+            # Missing Skills
             missing_skills = []
-            if missing_skills_match:
-                skills_text = missing_skills_match.group(1)
-                missing_skills = [line.strip("- ").strip() for line in skills_text.strip().splitlines() if line.strip()]
+            ms_match = re.search(r"Missing Skills:\s*(.*?)(?:Suggestions:|$)", text, re.DOTALL)
+            if ms_match:
+                for line in ms_match.group(1).strip().splitlines():
+                    line = line.strip()
+                    if line.startswith("-"):
+                        missing_skills.append(line[1:].strip())
 
             # Suggestions
-            suggestions_match = re.search(r"Suggestions:\s*(.*)", text, re.DOTALL)
             suggestions = []
-            if suggestions_match:
-                suggestions_text = suggestions_match.group(1)
-                suggestions = [line.strip("- ").strip() for line in suggestions_text.strip().splitlines() if line.strip()]
+            sug_match = re.search(r"Suggestions:\s*(.*)", text, re.DOTALL)
+            if sug_match:
+                for line in sug_match.group(1).strip().splitlines():
+                    line = line.strip()
+                    if line.startswith("-"):
+                        suggestions.append(line[1:].strip())
 
             return {
                 "match_score": match_score,
