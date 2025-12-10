@@ -124,11 +124,6 @@ def get_available_jobs():
 
 # ----------------- UPLOAD RESUME -----------------
 # ----------------- UPLOAD RESUME -----------------
-from flask import request, jsonify, current_app
-from flask_jwt_extended import get_jwt_identity
-from app.models import Application, User, Notification, db
-from app.analyzer import HybridResumeAnalyzer  # make sure to import your updated analyzer
-from app.decorators import role_required
 
 @candidate_bp.route("/upload_resume/<int:application_id>", methods=["POST"])
 @role_required(["candidate"])
