@@ -144,23 +144,13 @@ def upload_resume(application_id):
 
         file = request.files["resume"]
 
-        # --- Upload to Cloudinary ---
-        resume_url = HybridResumeAnalyzer.upload_cv(file)
+        # --- Use new CV parser (handles PDF + upload + analysis) ---
+        analyzer = HybridResumeAnalyzer()
+        parser_result = analyzer.upload_and_analyse(file, job.id)
+
+        resume_url = parser_result.get("cv_url")
         if not resume_url:
             return jsonify({"error": "Failed to upload resume"}), 500
-
-        # --- Extract PDF text if needed ---
-        resume_text = request.form.get("resume_text", "")
-        if not resume_text and file.filename.lower().endswith(".pdf"):
-            file.stream.seek(0)
-            pdf_doc = fitz.open(stream=file.stream.read(), filetype="pdf")
-            resume_text = ""
-            for page in pdf_doc:
-                resume_text += page.get_text()
-
-        # --- Hybrid Resume Analysis ---
-        analyzer = HybridResumeAnalyzer()
-        parser_result = analyzer.analyse(resume_text, job.id)
 
         # --- Save results ---
         application.resume_url = resume_url
