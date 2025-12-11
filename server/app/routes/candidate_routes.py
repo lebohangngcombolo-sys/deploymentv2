@@ -15,7 +15,6 @@ from app.utils.decorators import role_required
 from app.utils.helper import get_current_candidate
 from app.services.audit2 import AuditService
 import fitz
-from flask import jsonify, request, current_app
 import json
 import re
 
@@ -162,7 +161,8 @@ def upload_resume(application_id):
 
         # --- Hybrid Resume Analysis ---
         analyzer = HybridResumeAnalyzer()
-        parser_result = analyzer.analyse(resume_text, job.id)
+        parser_result = analyzer.analyse_resume(resume_text, job.id)
+
 
         # --- Save results ---
         application.resume_url = resume_url
@@ -337,6 +337,7 @@ def get_profile():
         return jsonify({"success": False, "message": "Internal server error"}), 500
 
 # ----------------- UPDATE PROFILE -----------------
+# ----------------- UPDATE PROFILE -----------------
 
 @candidate_bp.route("/profile", methods=["PUT"])
 @role_required(["candidate", "admin", "hiring_manager"])
@@ -418,8 +419,6 @@ def update_profile():
         current_app.logger.error(f"Update profile error: {e}", exc_info=True)
         db.session.rollback()
         return jsonify({"success": False, "message": "Internal server error"}), 500
-
-
 
 # ----------------- UPLOAD DOCUMENT -----------------
 @candidate_bp.route("/upload_document", methods=["POST"])
