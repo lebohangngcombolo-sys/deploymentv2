@@ -17,6 +17,13 @@ from app.utils.decorators import role_required
 from datetime import datetime, timedelta
 import secrets
 import jwt  # ← ADD THIS IMPORT
+from app.utils.enrollment_schema import EnrollmentSchema
+from app.services.enrollment_service import EnrollmentService
+from marshmallow import ValidationError
+
+
+
+
 
 
 
@@ -26,7 +33,8 @@ import jwt  # ← ADD THIS IMPORT
 ROLE_DASHBOARD_MAP = {
     "admin": "/api/dashboard/admin",
     "hiring_manager": "/api/dashboard/hiring-manager",
-    "candidate": "/dashboard/candidate"
+    "candidate": "/dashboard/candidate",
+    "hr": "/api/dashboard/hr"   # ← ADDED
 }
 
 # OAuth providers config
@@ -52,6 +60,7 @@ OAUTH_PROVIDERS = {
 
 def init_auth_routes(app):
 
+    enrollment_schema = EnrollmentSchema()
     # ------------------- Initialize OAuth -------------------
     if not hasattr(app, "oauth_initialized"):
         oauth.init_app(app)
@@ -616,29 +625,42 @@ def init_auth_routes(app):
         current_user_id = int(get_jwt_identity())
         AuditService.log(user_id=current_user_id, action="view_candidate_dashboard")
         return jsonify({"message": "Welcome to the Candidate Dashboard"}), 200
+    
+    @app.route("/api/dashboard/hr", methods=["GET"])
+    @role_required("hr")
+    @limiter.limit("60 per minute")
+    def hr_dashboard():
+        current_user_id = int(get_jwt_identity())
+        AuditService.log(user_id=current_user_id, action="view_hr_dashboard")
+    
+        return jsonify({"message": "Welcome to the HR Dashboard"}), 200
+
 
     # ------------------- CANDIDATE ENROLLMENT -------------------
     @app.route("/api/candidate/enrollment", methods=["POST"])
     @role_required("candidate")
-    @limiter.limit("10 per minute")  # Add this line
+    @limiter.limit("5 per minute")
     def candidate_enrollment():
         try:
-            current_user_id = int(get_jwt_identity())
-            user = User.query.get(current_user_id)
-            data = request.get_json()
+            user_id = int(get_jwt_identity())
+            user = User.query.get(user_id)
+            if not user:
+                return jsonify({"error": "User not found"}), 404
 
-            user.profile.update(data)
-            user.enrollment_completed = True
-            db.session.commit()
+            json_data = request.get_json()
+            if not json_data:
+                return jsonify({"error": "Invalid or missing JSON"}), 400
 
-            AuditService.log(user_id=user.id, action="complete_enrollment")
-
-            return jsonify({"message": "Enrollment completed successfully"}), 200
+            # Call the EnrollmentService
+            response, status = EnrollmentService.save_candidate_enrollment(user_id, json_data)
+            return jsonify(response), status
 
         except Exception as e:
             db.session.rollback()
-            current_app.logger.error(f"Candidate enrollment error: {str(e)}", exc_info=True)
+            current_app.logger.error(f"Enrollment error: {str(e)}", exc_info=True)
             return jsonify({"error": "Internal server error"}), 500
+
+
 
     # ------------------- ADMIN ENROLLMENT -------------------
     import re, secrets, string
@@ -659,8 +681,9 @@ def init_auth_routes(app):
             if not all([email, role]):
                 return jsonify({"error": "Email and role are required"}), 400
 
-            if role not in ["admin", "hiring_manager"]:
-                return jsonify({"error": "Role must be admin or hiring_manager"}), 400
+            if role not in ["admin", "hiring_manager", "hr"]:
+                return jsonify({"error": "Role must be admin, hiring_manager, or hr"}), 400
+
 
             if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
                 return jsonify({"error": "Invalid email format"}), 400

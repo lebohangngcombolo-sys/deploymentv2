@@ -30,4 +30,6 @@ bleach
 flask-limiter
 pdfplumber
 python-docx
+fpdf
+marshmallow
 

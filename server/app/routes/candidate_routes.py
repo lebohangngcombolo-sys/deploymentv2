@@ -15,6 +15,9 @@ from app.utils.decorators import role_required
 from app.utils.helper import get_current_candidate
 from app.services.audit2 import AuditService
 import fitz
+from flask import jsonify, request, current_app
+import json
+import re
 
 
 
@@ -159,8 +162,7 @@ def upload_resume(application_id):
 
         # --- Hybrid Resume Analysis ---
         analyzer = HybridResumeAnalyzer()
-        parser_result = analyzer.analyse_resume(resume_text, job.id)
-
+        parser_result = analyzer.analyse(resume_text, job.id)
 
         # --- Save results ---
         application.resume_url = resume_url
@@ -335,6 +337,7 @@ def get_profile():
         return jsonify({"success": False, "message": "Internal server error"}), 500
 
 # ----------------- UPDATE PROFILE -----------------
+
 @candidate_bp.route("/profile", methods=["PUT"])
 @role_required(["candidate", "admin", "hiring_manager"])
 def update_profile():
@@ -357,19 +360,37 @@ def update_profile():
         data = request.get_json() or {}
 
         for key, value in data.items():
+            # Prevent email from being updated
+            if key == "email":
+                continue
+
             # Handle date fields
             if key == "dob":
                 if value:
                     try:
                         value = datetime.strptime(value, "%Y-%m-%d").date()
                     except ValueError:
-                        return jsonify({"success": False, "message": "Invalid date format"}), 400
+                        return jsonify({"success": False, "message": "Invalid date format, expected YYYY-MM-DD"}), 400
                 else:
                     value = None
 
+            # Validate ID number: must be 13 digits, numbers only
+            if key == "id_number":
+                if value:
+                    if not re.fullmatch(r"\d{13}", str(value)):
+                        return jsonify({"success": False, "message": "ID number must be exactly 13 digits"}), 400
+                    
+            # Validate phone number: must be exactly 10 digits, numbers only
+            if key == "phone":
+                if value:
+                    if not re.fullmatch(r"\d{10}", str(value)):
+                        return jsonify({
+                            "success": False,
+                            "message": "Phone number must be exactly 10 digits and contain numbers only"
+                        }), 400
+         
             # Handle JSON fields if sent as string
             if key in ["skills", "work_experience", "education", "certifications", "languages", "documents"] and isinstance(value, str):
-                import json
                 try:
                     value = json.loads(value)
                 except json.JSONDecodeError:
@@ -397,6 +418,7 @@ def update_profile():
         current_app.logger.error(f"Update profile error: {e}", exc_info=True)
         db.session.rollback()
         return jsonify({"success": False, "message": "Internal server error"}), 500
+
 
 
 # ----------------- UPLOAD DOCUMENT -----------------
